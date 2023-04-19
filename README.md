@@ -18,8 +18,10 @@
 	)
 
      // цепочка данных
+     
      data := "my name is shao khan"
-	strs := strings.Split(data, " ") 
+	
+     strs := strings.Split(data, " ") 
 
      // хэш
      hash, err := gen.Snapshot(strs...) // хэш
