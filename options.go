@@ -7,9 +7,10 @@ import (
 
 type Option func(gen *Generator)
 
-func SetDefaultElement(el byte) Option {
+// Default element of the final field generating SL2 group
+func SetDefaultElement() Option {
 	return func(gen *Generator) {
-		gen.generate = Element(el)
+		gen.generate = Element(2)
 	}
 }
 

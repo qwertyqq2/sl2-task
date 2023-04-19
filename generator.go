@@ -4,29 +4,40 @@ import (
 	"fmt"
 	"hash"
 	"strconv"
+	"sync"
 
 	galof "github.com/cloud9-tools/go-galoisfield"
 )
 
 const (
-	DefaultGenerate256 = 5
+	DefaultGenerate256 = 3
 )
 
 type Element byte
 
+// Generator of SL2(F_2^n) scheme
 type Generator struct {
-	genA  ElGroup
-	genB  ElGroup
+	// Generation elements
+	genA ElGroup
+	genB ElGroup
+
+	// Finite field F = F_2^n
 	field *galof.GF
 
+	// inside F
 	generate Element
 
 	join, sum, multi bool
-	hasher           hash.Hash
+
+	//hash schema
+	hasher hash.Hash
+	lk     sync.Mutex
 }
 
+// Element of Sl2 group
 type ElGroup struct {
 	a, b, c, d Element
+	gen        *Generator
 }
 
 func (el ElGroup) foreach(fn func(in Element, temp []byte) []byte) []byte {
@@ -40,14 +51,15 @@ func (el ElGroup) foreach(fn func(in Element, temp []byte) []byte) []byte {
 }
 
 func copy(el ElGroup) ElGroup {
-	return ElGroup{
-		a: el.a,
-		b: el.b,
-		c: el.c,
-		d: el.d,
-	}
+	return ElGroup{a: el.a, b: el.b, c: el.c, d: el.d}
 }
 
+// Neutral element SL2 group
+func Ones() ElGroup {
+	return ElGroup{a: 1, b: 0, c: 0, d: 1}
+}
+
+// Generate sl2 group
 func Generate256Defualt(opts ...Option) *Generator {
 	field := galof.DefaultGF256
 	gen := &Generator{
@@ -63,19 +75,9 @@ func Generate256Defualt(opts ...Option) *Generator {
 		gen.generate = DefaultGenerate256
 	}
 
-	A := ElGroup{
-		a: gen.generate,
-		b: 1,
-		c: 1,
-		d: 0,
-	}
+	A := ElGroup{a: gen.generate, b: 1, c: 1, d: 0}
+	B := ElGroup{a: gen.generate, b: gen.generate + 1, c: 1, d: 1}
 
-	B := ElGroup{
-		a: gen.generate,
-		b: gen.generate + 1,
-		c: 1,
-		d: 1,
-	}
 	gen.genA = A
 	gen.genB = B
 
@@ -90,14 +92,37 @@ func (gen *Generator) add(a, b byte) Element {
 	return Element(gen.field.Add(byte(a), byte(b)))
 }
 
-func (gen *Generator) mult(some ElGroup, other ElGroup) ElGroup {
+func (gen *Generator) Mult(some ElGroup, other ElGroup) ElGroup {
+	if !gen.Incoming(some) || !gen.Incoming(other) {
+		return ElGroup{}
+	}
 	return ElGroup{
-		a: gen.add(gen.mul(some.a, other.a), gen.mul(some.b, other.c)),
-		b: gen.add(gen.mul(some.a, other.b), gen.mul(some.b, other.d)),
-		c: gen.add(gen.mul(some.c, other.a), gen.mul(some.d, other.c)),
-		d: gen.add(gen.mul(some.c, other.b), gen.mul(some.d, other.d)),
+		a:   gen.add(gen.mul(some.a, other.a), gen.mul(some.b, other.c)),
+		b:   gen.add(gen.mul(some.a, other.b), gen.mul(some.b, other.d)),
+		c:   gen.add(gen.mul(some.c, other.a), gen.mul(some.d, other.c)),
+		d:   gen.add(gen.mul(some.c, other.b), gen.mul(some.d, other.d)),
+		gen: some.gen,
 	}
 
+}
+
+// Build a snapshot of the data chain
+func (gen *Generator) Snapshot(data ...string) ([]byte, error) {
+	res := Ones()
+	for _, d := range data {
+		el, err := gen.Marshal(d)
+		if err != nil {
+			return nil, err
+		}
+		res = gen.Mult(res, el)
+	}
+	temp := res.foreach(func(in Element, temp []byte) []byte {
+		return append(temp, byte(in))
+	})
+
+	return gen.hashOpts(temp, func(b []byte) ([]byte, error) {
+		return temp, nil
+	})
 }
 
 func marshal(data string) ([]int, error) {
@@ -119,7 +144,14 @@ func marshal(data string) ([]int, error) {
 	return res, nil
 }
 
-func (gen *Generator) snap(data string) (ElGroup, error) {
+// Whether the element belongs to the SL2 group
+func (gen *Generator) Incoming(el ElGroup) bool {
+	det := gen.add(gen.mul(el.a, el.d), gen.mul(el.b, el.c))
+	return det == 1
+}
+
+// String to SL2 element
+func (gen *Generator) Marshal(data string) (ElGroup, error) {
 	bin, err := marshal(data)
 	if err != nil {
 		return ElGroup{}, err
@@ -136,35 +168,22 @@ func (gen *Generator) snap(data string) (ElGroup, error) {
 		if err != nil {
 			return ElGroup{}, err
 		}
-		el = gen.mult(el, nel)
+		el = gen.Mult(el, nel)
 	}
 	return el, nil
 }
 
-func (gen *Generator) Snap(data string) ([]byte, error) {
-	el, err := gen.snap(data)
-	if err != nil {
-		return nil, err
+func (gen *Generator) Snap(el ElGroup) ([]byte, error) {
+	if !gen.Incoming(el) {
+		return nil, fmt.Errorf("el not inside SL2 group")
 	}
 
 	temp := el.foreach(func(in Element, temp []byte) []byte {
 		return append(temp, byte(in))
 	})
 
-	if gen.join {
-
-	}
-
-	if gen.sum {
-
-	}
-
-	if gen.multi {
-
-	}
-
 	return gen.hashOpts(temp, func(b []byte) ([]byte, error) {
-		return b, nil
+		return temp, nil
 	})
 }
 
@@ -180,6 +199,10 @@ func (gen *Generator) pi(v int) (ElGroup, error) {
 }
 
 func (gen *Generator) hashOpts(data []byte, opts func([]byte) ([]byte, error)) ([]byte, error) {
+	gen.lk.Lock()
+	defer gen.lk.Unlock()
+	defer gen.hasher.Reset()
+
 	res, err := opts(data)
 	if err != nil {
 		return nil, err
