@@ -10,15 +10,18 @@
 
 ## Usage
 
+     // создание генетора группы SL2
      gen := sl2.Generate(
 		sl2.SetOrderField128(),
 		sl2.SetDefaultElement(),
 		sl2.SetSha256(),
-	) // создание генетора группы *SL2*
+	)
 
+     // цепочка данных
      data := "my name is shao khan"
-	strs := strings.Split(data, " ") //цепочка данных
+	strs := strings.Split(data, " ") 
 
+     // хэш
      hash, err := gen.Snapshot(strs...) // хэш
 	
 
