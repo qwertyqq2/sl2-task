@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,7 +15,7 @@ const (
 )
 
 func TestAssoc(t *testing.T) {
-	gen := Generate256Defualt(
+	gen := Generate(
 		SetDefaultElement(),
 		SetSha256(),
 	)
@@ -62,6 +63,59 @@ func TestAssoc(t *testing.T) {
 		t.Fatal()
 	}
 
+	chainContintie := []string{"block6, block7, block8"}
+	chain := append(chain1, chainContintie...)
+
+	snapChain, err := gen.Snapshot(chain...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	idx := int(len(chain) / 2)
+	base := chain[idx]
+
+	snap, err := bildChainSnapshot(t, idx, base, chain, gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(snap, snapChain) {
+		t.Fatal()
+	}
+
+	fmt.Println("the associativity property is satisfied")
+}
+
+func bildChainSnapshot(t *testing.T, idx int, base string, chain []string, gen *Generator) ([]byte, error) {
+	chainBefore := chain[:idx]
+	chainAfter := chain[idx+1:]
+
+	snapBefore, err := gen.SnapshotElement(chainBefore...)
+	if err != nil {
+		return nil, err
+	}
+	snapAfter, err := gen.SnapshotElement(chainAfter...)
+	if err != nil {
+		return nil, err
+	}
+
+	elBase, err := gen.Marshal(base)
+	if err != nil {
+		return nil, err
+	}
+
+	m, err := gen.Mult(snapBefore, elBase)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := gen.Mult(m, snapAfter)
+	if err != nil {
+		return nil, err
+	}
+
+	return res.Snap()
+
 }
 
 func TestMarshal(t *testing.T) {
@@ -87,8 +141,8 @@ func randStringRunes(n int) string {
 	return string(b)
 }
 
-func TestHash(t *testing.T) {
-	gen := Generate256Defualt(
+func TestEqualInput(t *testing.T) {
+	gen := Generate(
 		SetDefaultElement(),
 		SetSha256(),
 	)
@@ -97,7 +151,7 @@ func TestHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := gen.Snapshot("qwe")
+	h2, err := gen.Snapshot("qweqwe")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,4 +194,22 @@ Finish:
 
 	fmt.Println("equals", equals)
 	fmt.Println("nequals", nequals)
+}
+
+func TestAsHash(t *testing.T) {
+	gen := Generate(
+		SetOrderField128(),
+		SetDefaultElement(),
+		SetSha256(),
+	)
+
+	data := "my name is shao khan"
+	strs := strings.Split(data, " ")
+
+	hash, err := gen.Snapshot(strs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Println(string(hash))
 }

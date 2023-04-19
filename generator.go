@@ -40,6 +40,14 @@ type ElGroup struct {
 	gen        *Generator
 }
 
+func (el ElGroup) Snap() ([]byte, error) {
+	if el.gen == nil {
+		return nil, fmt.Errorf("undefined generator")
+	}
+
+	return el.gen.Snap(el)
+}
+
 func (el ElGroup) foreach(fn func(in Element, temp []byte) []byte) []byte {
 	var res []byte
 	res = fn(el.a, res)
@@ -51,20 +59,12 @@ func (el ElGroup) foreach(fn func(in Element, temp []byte) []byte) []byte {
 }
 
 func copy(el ElGroup) ElGroup {
-	return ElGroup{a: el.a, b: el.b, c: el.c, d: el.d}
-}
-
-// Neutral element SL2 group
-func Ones() ElGroup {
-	return ElGroup{a: 1, b: 0, c: 0, d: 1}
+	return ElGroup{a: el.a, b: el.b, c: el.c, d: el.d, gen: el.gen}
 }
 
 // Generate sl2 group
-func Generate256Defualt(opts ...Option) *Generator {
-	field := galof.DefaultGF256
-	gen := &Generator{
-		field: field,
-	}
+func Generate(opts ...Option) *Generator {
+	gen := &Generator{}
 
 	defaultOpts()(gen)
 	for _, o := range opts {
@@ -75,13 +75,17 @@ func Generate256Defualt(opts ...Option) *Generator {
 		gen.generate = DefaultGenerate256
 	}
 
-	A := ElGroup{a: gen.generate, b: 1, c: 1, d: 0}
-	B := ElGroup{a: gen.generate, b: gen.generate + 1, c: 1, d: 1}
+	A := ElGroup{a: gen.generate, b: 1, c: 1, d: 0, gen: gen}
+	B := ElGroup{a: gen.generate, b: gen.generate + 1, c: 1, d: 1, gen: gen}
 
 	gen.genA = A
 	gen.genB = B
 
 	return gen
+}
+
+func (gen *Generator) Ones() ElGroup {
+	return ElGroup{a: 1, b: 0, c: 0, d: 1, gen: gen}
 }
 
 func (gen *Generator) mul(a, b Element) byte {
@@ -92,9 +96,12 @@ func (gen *Generator) add(a, b byte) Element {
 	return Element(gen.field.Add(byte(a), byte(b)))
 }
 
-func (gen *Generator) Mult(some ElGroup, other ElGroup) ElGroup {
+func (gen *Generator) Mult(some ElGroup, other ElGroup) (ElGroup, error) {
 	if !gen.Incoming(some) || !gen.Incoming(other) {
-		return ElGroup{}
+		return ElGroup{}, fmt.Errorf("det neq zero")
+	}
+	if some.gen == nil || other.gen == nil {
+		return ElGroup{}, fmt.Errorf("undefined generator")
 	}
 	return ElGroup{
 		a:   gen.add(gen.mul(some.a, other.a), gen.mul(some.b, other.c)),
@@ -102,20 +109,41 @@ func (gen *Generator) Mult(some ElGroup, other ElGroup) ElGroup {
 		c:   gen.add(gen.mul(some.c, other.a), gen.mul(some.d, other.c)),
 		d:   gen.add(gen.mul(some.c, other.b), gen.mul(some.d, other.d)),
 		gen: some.gen,
+	}, nil
+
+}
+
+func (gen *Generator) SnapshotElement(data ...string) (ElGroup, error) {
+	res := gen.Ones()
+	for _, d := range data {
+		el, err := gen.Marshal(d)
+		if err != nil {
+			return ElGroup{}, err
+		}
+		res, err = gen.Mult(res, el)
+		if err != nil {
+			return ElGroup{}, err
+		}
 	}
 
+	return res, nil
 }
 
 // Build a snapshot of the data chain
 func (gen *Generator) Snapshot(data ...string) ([]byte, error) {
-	res := Ones()
+	res := gen.Ones()
+
 	for _, d := range data {
 		el, err := gen.Marshal(d)
 		if err != nil {
 			return nil, err
 		}
-		res = gen.Mult(res, el)
+		res, err = gen.Mult(res, el)
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	temp := res.foreach(func(in Element, temp []byte) []byte {
 		return append(temp, byte(in))
 	})
@@ -168,7 +196,10 @@ func (gen *Generator) Marshal(data string) (ElGroup, error) {
 		if err != nil {
 			return ElGroup{}, err
 		}
-		el = gen.Mult(el, nel)
+		el, err = gen.Mult(el, nel)
+		if err != nil {
+			return ElGroup{}, err
+		}
 	}
 	return el, nil
 }

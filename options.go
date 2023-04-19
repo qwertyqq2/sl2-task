@@ -3,6 +3,8 @@ package sl2
 import (
 	"crypto/md5"
 	"crypto/sha256"
+
+	galof "github.com/cloud9-tools/go-galoisfield"
 )
 
 type Option func(gen *Generator)
@@ -11,6 +13,30 @@ type Option func(gen *Generator)
 func SetDefaultElement() Option {
 	return func(gen *Generator) {
 		gen.generate = Element(2)
+	}
+}
+
+func SetOrderField256() Option {
+	return func(gen *Generator) {
+		gen.field = galof.DefaultGF256
+	}
+}
+
+func SetOrderField128() Option {
+	return func(gen *Generator) {
+		gen.field = galof.DefaultGF128
+	}
+}
+
+func SetOrderField64() Option {
+	return func(gen *Generator) {
+		gen.field = galof.DefaultGF64
+	}
+}
+
+func SetOrderField32() Option {
+	return func(gen *Generator) {
+		gen.field = galof.DefaultGF32
 	}
 }
 
@@ -50,5 +76,6 @@ func defaultOpts() Option {
 		gen.sum = false
 		gen.multi = false
 		gen.hasher = sha256.New()
+		gen.field = galof.DefaultGF128
 	}
 }
