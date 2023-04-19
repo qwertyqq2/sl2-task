@@ -3,6 +3,8 @@
 
 Алгоритм основан на построении группы *SL2(F_p)*, элементами которой являются матрицы 2 на 2. 
 
+https://link.springer.com/content/pdf/10.1007/3-540-48658-5_5.pdf
+
 ## Install
 
      go get github.com/qwertyqq2/sl2-task
