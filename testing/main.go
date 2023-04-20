@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/qwertyqq2/sl2"
@@ -15,6 +17,12 @@ type Stats struct {
 	oper int
 	time time.Duration
 }
+
+var (
+	filename = "testing64big.txt"
+	mu       sync.Mutex
+	baseSize = 30
+)
 
 func (s *Stats) str() string {
 	return fmt.Sprintf("oper: %d, timedur: %d\n", s.oper, s.time)
@@ -34,47 +42,103 @@ func randStringRunes(n int) string {
 	return string(b)
 }
 
-func main() {
-	gen := sl2.Generate256Defualt(
+func generatorFactory() *sl2.Generator {
+	return sl2.Generate(
 		sl2.SetDefaultElement(),
 		sl2.SetSha256(),
+		sl2.SetOrderField64(),
 	)
+}
 
-	base, err := gen.Snap(randStringRunes(10))
+type finder struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	base []byte
+
+	gen  *sl2.Generator
+	oper int
+	file *os.File
+
+	ch chan *Stats
+
+	lastUpdate time.Time
+}
+
+func newFinder(ctx context.Context, file *os.File, base []byte) *finder {
+	gen := generatorFactory()
+	ctx, cancel := context.WithCancel(ctx)
+	return &finder{
+		ctx:    ctx,
+		cancel: cancel,
+		gen:    gen,
+		ch:     make(chan *Stats, 50),
+		file:   file,
+		base:   base,
+	}
+}
+
+func (finder *finder) find(countFinder int) {
+	if countFinder <= 0 {
+		return
+	}
+	for i := 0; i < countFinder; i++ {
+		go find(finder.ctx, finder.cancel, finder.base, func() ([]byte, error) {
+			str := randStringRunes(baseSize)
+			return finder.gen.Snapshot(str)
+		}, func(stats *Stats) {
+			select {
+			case <-finder.ctx.Done():
+				return
+			case finder.ch <- stats:
+			}
+		})
+	}
+}
+
+func (finder *finder) run(countFinder int) {
+	go finder.find(countFinder)
+	for {
+		select {
+		case stat := <-finder.ch:
+			mu.Lock()
+			fmt.Println(stat.str())
+			if _, err := finder.file.Write([]byte(stat.str())); err != nil {
+				log.Fatal(err)
+			}
+			mu.Unlock()
+
+		case <-finder.ctx.Done():
+			return
+		}
+	}
+}
+
+func main() {
+	gen := generatorFactory()
+
+	f, err := os.Create(filename)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	statsCh := make(chan *Stats, 5)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	base, err := gen.Snapshot(randStringRunes(baseSize))
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	var countFinder = 10
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+
+	var countFinder = 3
 
 	defer cancel()
 
-	for i := 0; i < countFinder; i++ {
-		go find(
-			ctx, cancel, base,
-			func() ([]byte, error) {
-				str := randStringRunes(10)
-				return gen.Snap(str)
-			}, func(stats *Stats) {
-				select {
-				case <-ctx.Done():
-					return
-				case statsCh <- stats:
-
-				}
-			})
+	for i := 0; i < 3; i++ {
+		go newFinder(ctx, f, base).run(countFinder)
 	}
 
-	for {
-		select {
-		case stat := <-statsCh:
-			fmt.Println(stat.str())
-		case <-ctx.Done():
-			return
-		}
+	select {
+	case <-ctx.Done():
 	}
 }
 
@@ -104,8 +168,9 @@ func find(
 			}
 			if bytes.Equal(snap, base) {
 				t := time.Now().Sub(lastUpdate)
-				hand(&Stats{oper: counter, time: t})
+				hand(&Stats{oper: counter, time: time.Duration(t.Seconds())})
 				lastUpdate = time.Now()
+				counter = 0
 			}
 			counter++
 		}
